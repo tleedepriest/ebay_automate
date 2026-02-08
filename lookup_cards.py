@@ -16,58 +16,6 @@ def normalize_number(num: str) -> str:
     return num
 
 
-def lookup_best_match(db_path: str, card_name: str, card_number: str, top_k: int = 3):
-    """
-    Filter candidates by exact card_number (numerator), then fuzzy-rank by card_name.
-    Returns list of dicts, best first.
-    """
-    n = normalize_number(card_number)
-    print(n)
-    n=53
-    if not n:
-        return []
-
-    con = sqlite3.connect(db_path)
-    cur = con.cursor()
-
-    cur.execute(
-        """
-        SELECT card_name, card_number, card_url, ungraded_price, grade9_price, psa10_price
-        FROM cards
-        WHERE card_number = ?
-        """,
-        (n,),
-    )
-
-    candidates = cur.fetchall()
-    con.close()
-
-    if not candidates:
-        return []
-
-    scored = []
-    for cname, cnum, url, ungraded, g9, psa10 in candidates:
-        score = fuzz.WRatio(card_name, cname)
-        scored.append((score, cname, cnum, url, ungraded, g9, psa10))
-
-    scored.sort(reverse=True, key=lambda x: x[0])
-
-    out = []
-    for score, cname, cnum, url, ungraded, g9, psa10 in scored[:top_k]:
-        out.append(
-            {
-                "score": score,
-                "card_name": cname,
-                "card_number": cnum,
-                "card_url": url,
-                "ungraded_price": ungraded,
-                "grade9_price": g9,
-                "psa10_price": psa10,
-            }
-        )
-    return out
-
-
 def run():
     os.makedirs("tmp", exist_ok=True)
 
