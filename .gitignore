@@ -1,0 +1,9 @@
+tmp/*
+*.csv
+*.jsonl
+__pycache__/*
+*.png
+*.zip
+chromedriver-linux64/*
+*.swp
+*.db

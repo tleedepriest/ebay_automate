@@ -205,6 +205,24 @@ def parse_cards_from_html(set_url: str, html: str):
 # Main build loop
 # -----------------------
 
+def _slug_from_set_url(set_url: str) -> str:
+    """
+    PriceCharting set URLs typically look like:
+      https://www.pricecharting.com/console/pokemon-151
+    We treat the last path segment as the set_slug.
+    """
+    path = urlparse(set_url).path.strip("/")
+    return path.split("/")[-1] if path else ""
+
+def _get_existing_set_slugs_from_cards(con) -> set[str]:
+    """
+    Pull distinct set_slug values that are already present in the cards table.
+    (Assumes your cards table has a set_slug column.)
+    """
+    cur = con.cursor()
+    cur.execute("SELECT DISTINCT set_slug FROM cards WHERE set_slug IS NOT NULL AND set_slug != ''")
+    return {r[0] for r in cur.fetchall()}
+
 def build_db_from_sets_csv(
     sets_csv: str = "pricecharting_sets.csv",
     db_path: str = "pricecharting.db",
@@ -212,49 +230,82 @@ def build_db_from_sets_csv(
     headless: bool = True,
     chrome_binary: str | None = None,
     limit_sets: int | None = None,
+    start_at: int | None = None,          # optional index-based start within the *skipped list*
+    skip_japanese: bool = True,
 ):
     con = init_db(db_path)
-    #driver = make_chrome_driver(chromedriver_path, headless=headless, chrome_binary=chrome_binary)
-    start_at=262
 
     try:
+        # 1) What do we already have in the DB?
+        existing_slugs = _get_existing_set_slugs_from_cards(con)
+        print(f"DB has cards for {len(existing_slugs)} set_slugs")
+
+        # 2) Load CSV sets and compute which ones were skipped
+        all_sets = []
         with open(sets_csv, newline="", encoding="utf-8") as f:
             reader = csv.DictReader(f)
-            for i, row in enumerate(reader, start=1):
-                
-                if i < start_at:
-                    continue
-                
-                if limit_sets and i > limit_sets:
-                    break
-
-
-                set_url = row["set_url"].strip()
+            for row in reader:
+                set_url = row.get("set_url", "").strip()
                 set_name = row.get("set_name", "").strip()
-                print(f"[{i}] {set_name} | {set_url}")
-                if "Japanese" in set_name:
-                    print("skipping japanese for now")
+                if not set_url:
                     continue
 
-                try:
-                    html = scrape_set_with_retry(
-                            set_url=set_url,
-                            chromedriver_path=chromedriver_path,
-                            headless=headless,
-                            chrome_binary=chrome_binary,
-                            max_attempts=3
-                            )
-                    cards = parse_cards_from_html(set_url, html)
-                    upsert_cards(con, cards)
-                    print(f"  +{len(cards)} cards")
-                except Exception as e:
-                    print(f"  ERROR: {e}")
+                set_slug = row.get("set_slug", "").strip() or _slug_from_set_url(set_url)
+                all_sets.append({
+                    "set_slug": set_slug,
+                    "set_url": set_url,
+                    "set_name": set_name,
+                })
 
-                time.sleep(0.8)  # tiny delay between sets
+        # Only those whose slug is NOT in DB
+        skipped = [s for s in all_sets if s["set_slug"] and s["set_slug"] not in existing_slugs]
+
+        # Optional: skip Japanese by name
+        if skip_japanese:
+            skipped_non_jp = []
+            for s in skipped:
+                if "japanese" in (s["set_name"] or "").lower():
+                    continue
+                skipped_non_jp.append(s)
+            skipped = skipped_non_jp
+
+        print(f"CSV has {len(all_sets)} sets")
+        print(f"Skipped sets to scrape: {len(skipped)}")
+
+        # 3) Optionally start at N *within the skipped list*
+        if start_at is not None:
+            skipped = skipped[max(0, start_at - 1):]
+
+        # 4) Optionally cap how many skipped sets to scrape
+        if limit_sets is not None:
+            skipped = skipped[:limit_sets]
+
+        # 5) Scrape only skipped sets
+        for idx, s in enumerate(skipped, start=1):
+            set_url = s["set_url"]
+            set_name = s["set_name"]
+            set_slug = s["set_slug"]
+
+            print(f"[{idx}/{len(skipped)}] {set_name} ({set_slug}) | {set_url}")
+
+            try:
+                html = scrape_set_with_retry(
+                    set_url=set_url,
+                    chromedriver_path=chromedriver_path,
+                    headless=headless,
+                    chrome_binary=chrome_binary,
+                    max_attempts=3,
+                )
+                cards = parse_cards_from_html(set_url, html)
+                upsert_cards(con, cards)
+                print(f"  +{len(cards)} cards")
+            except Exception as e:
+                print(f"  ERROR: {e}")
+
+            time.sleep(0.8)
 
     finally:
         con.close()
-
 
 if __name__ == "__main__":
     # EDIT THESE PATHS:

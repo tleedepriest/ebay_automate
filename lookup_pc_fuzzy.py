@@ -1,145 +1,151 @@
+# lookup_pc_fuzzy.py
 import re
 import sqlite3
 from rapidfuzz import fuzz
 
-def extract_int(num_text: str):
+# -----------------------
+# Helpers
+# -----------------------
+
+def extract_x(collector_text):
     """
-    Pull the first integer from strings like:
-      '053/182' -> 53
-      'SV1V 053' -> 53
-      '#245' -> 245
+    "103/165" -> 103
+    "#245" -> 245
     """
-    if not num_text:
+    if not collector_text:
         return None
-    m = re.search(r"(\d{1,4})", str(num_text))
-    if not m:
-        return None
-    return int(m.group(1))
+    m = re.search(r"(\d{1,4})", str(collector_text))
+    return int(m.group(1)) if m else None
 
-def normalize_int_str(n: int | None):
-    return str(n) if n is not None else ""
+# -----------------------
+# Candidate set filtering
+# -----------------------
 
-def number_similarity(input_num_text: str, candidate_num_text: str) -> int:
+def get_candidate_set_slugs(con,
+                            set_size: int | None,
+                            copyright_year: int | None):
+    where = ["language = 'English'"]
+    params = []
+
+    if set_size is not None:
+        where.append("base_total = ?")
+        params.append(int(set_size))
+
+    if copyright_year is not None:
+        where.append("(released_year = ? OR released_year = ?)")
+        params.extend([int(copyright_year), int(copyright_year) - 1])
+
+    sql = f"""
+        SELECT set_slug
+        FROM set_meta
+        WHERE {" AND ".join(where)}
     """
-    Score number match 0..100.
-    Compares extracted ints primarily, but falls back to fuzzy on raw strings.
-    """
-    a = extract_int(input_num_text)
-    b = extract_int(candidate_num_text)
 
-    if a is not None and b is not None:
-        # exact int match is best
-        if a == b:
-            return 100
-        # close numbers get some credit (rarely needed, but harmless)
-        diff = abs(a - b)
-        if diff <= 2:
-            return 70
-        if diff <= 5:
-            return 40
-        return 0
-
-    # fallback: raw fuzzy
-    return fuzz.partial_ratio(str(input_num_text), str(candidate_num_text))
-
-def fetch_candidates(con, input_name: str, input_number_text: str, limit: int = 500):
-    """
-    Get a candidate pool from SQLite.
-    Strategy:
-      - If we can extract an int n:
-          pull rows where card_number = n OR card_number like '%n' OR card_number like '%#n%' etc
-        (we store just '245' typically, but some sets might have '053' in DB depending on parsing)
-      - Also add a name-based pool (top rows by LIKE token) as fallback.
-    """
     cur = con.cursor()
-    n = extract_int(input_number_text)
+    cur.execute(sql, params)
+    return [r[0] for r in cur.fetchall()]
 
-    candidates = []
+# -----------------------
+# Card lookup
+# -----------------------
 
-    if n is not None:
-        n_str = str(n)
-        # broaden match: '53', '053', '153' won't match equals, but LIKE can catch bad formatting
-        cur.execute(
-            """
-            SELECT card_name, card_number, card_url, ungraded_price, grade9_price, psa10_price
-            FROM cards
-            WHERE card_number = ?
-               OR card_number = ?
-               OR card_number LIKE ?
-               OR card_number LIKE ?
-            LIMIT ?
-            """,
-            (
-                n_str,
-                n_str.zfill(3),           # handle '053' stored (just in case)
-                f"%{n_str}%",             # broad catch-all
-                f"%{n_str.zfill(3)}%",
-                limit,
-            ),
-        )
-        candidates.extend(cur.fetchall())
+def fetch_candidates(con,
+                     set_slugs,
+                     num_x):
 
-    # If number gave nothing (or you want extra recall), add a name-based pool:
-    # use the first word token to avoid scanning everything
-    tok = (input_name or "").strip().split(" ")[0] if input_name else ""
-    if tok:
-        cur.execute(
-            """
-            SELECT card_name, card_number, card_url, ungraded_price, grade9_price, psa10_price
-            FROM cards
-            WHERE card_name LIKE ?
-            LIMIT ?
-            """,
-            (f"%{tok}%", limit),
-        )
-        candidates.extend(cur.fetchall())
-
-    # de-dupe by card_url
-    dedup = {}
-    for row in candidates:
-        url = row[2]
-        dedup[url] = row
-    return list(dedup.values())
-
-def lookup_best_match(db_path: str, card_name: str, card_number_text: str, top_k: int = 5):
-    """
-    Rank by combined score:
-      80% name similarity + 20% number similarity
-    Returns top_k matches.
-    """
-    con = sqlite3.connect(db_path)
-    try:
-        candidates = fetch_candidates(con, card_name, card_number_text, limit=800)
-    finally:
-        con.close()
-
-    if not candidates:
+    if not set_slugs or num_x is None:
         return []
 
+    placeholders = ",".join(["?"] * len(set_slugs))
+    n = str(num_x)
+    n3 = n.zfill(3)
+    print(n)
+    print(n3)
+    print(set_slugs)
+    
+    cur = con.cursor()
+    cur.execute(f"""
+        SELECT card_name, card_number, card_url,
+               ungraded_price, grade9_price, psa10_price,
+               set_slug, set_url
+        FROM cards
+        WHERE set_slug in ({placeholders})
+          AND (
+                card_number = ?
+             OR card_number = ?
+             OR card_number LIKE ?
+             OR card_number LIKE ?
+          )""", (*set_slugs, n, n3, f"%{n}%", f"%{n3}%"))
+    
+    rows = cur.fetchall()
+    #print(rows)
+    dedup = {}
+    for r in rows:
+        dedup[r[2]] = r
+    return list(dedup.values())
+
+# -----------------------
+# Ranking
+# -----------------------
+
+def rank_candidates(card_name, num_x, candidates, top_k=10):
     scored = []
-    for cname, cnum, url, ungraded, g9, psa10 in candidates:
+    for cname, cnum, url, ungraded, g9, psa10, set_slug, set_url in candidates:
         name_score = fuzz.WRatio(card_name, cname) if card_name else 0
-        num_score = number_similarity(card_number_text, cnum)
+        cand_x = extract_x(cnum)
+        num_score = 100 if cand_x == num_x else 0
 
-        combined = int(round(0.80 * name_score + 0.20 * num_score))
+        combined = int(round(0.85 * name_score + 0.15 * num_score))
 
-        scored.append((combined, name_score, num_score, cname, cnum, url, ungraded, g9, psa10))
+        scored.append((combined, cname, cnum, url, ungraded, g9, psa10, set_slug, set_url))
 
     scored.sort(reverse=True, key=lambda x: x[0])
 
     out = []
-    for combined, name_score, num_score, cname, cnum, url, ungraded, g9, psa10 in scored[:top_k]:
+    for combined, cname, cnum, url, ungraded, g9, psa10, set_slug, set_url in scored[:top_k]:
         out.append({
             "score": combined,
-            "name_score": name_score,
-            "number_score": num_score,
             "card_name": cname,
             "card_number": cnum,
             "card_url": url,
             "ungraded_price": ungraded,
             "grade9_price": g9,
             "psa10_price": psa10,
+            "set_slug": set_slug,
+            "set_url": set_url,
         })
-
     return out
+
+# -----------------------
+# Public API
+# -----------------------
+
+def lookup_best_match(db_path,
+                      card_name,
+                      collector_number,
+                      set_size,
+                      copyright_year,
+                      top_k=10):
+
+    num_x = extract_x(collector_number)
+
+    con = sqlite3.connect(db_path)
+    try:
+        set_slugs = get_candidate_set_slugs(
+            con,
+            set_size=set_size,
+            copyright_year=copyright_year
+        )
+        candidates = fetch_candidates(
+            con,
+            set_slugs=set_slugs,
+            num_x=num_x
+        )
+    finally:
+        con.close()
+
+    if not candidates:
+        return []
+
+    return rank_candidates(card_name, num_x, candidates, top_k)
 
