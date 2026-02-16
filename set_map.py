@@ -36,6 +36,7 @@ SET_MAP = {
     "pokemon-evolving-skies": "Evolving Skies Set",
     "pokemon-expedition": "Expedition Set",
     "pokemon-fates-collide": "Fates Collide Set",
+    "pokemon-flashfire": "XY Flashfire Set",
     "pokemon-forbidden-light": "Forbidden Light Set",
     "pokemon-fossil": "Fossil Set",
     "pokemon-furious-fists": "Furious Fists Set",
