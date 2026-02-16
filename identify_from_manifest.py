@@ -49,7 +49,7 @@ schema = {
     "additionalProperties": False
 }
 
-def identify_card(image_path: str, min_copyright_year: int | None = None):
+def identify_card(image_path: str, min_copyright_year: int | None = None, extra_prompt_information: str = ""):
     img_url = to_data_url(image_path)
 
     # Build year constraint instructions (prompt-level)
@@ -76,6 +76,8 @@ def identify_card(image_path: str, min_copyright_year: int | None = None):
         f"{year_block}\n"
         "If uncertain about any field, lower confidence (0 to 1).\n"
     )
+
+    prompt = prompt + extra_prompt_information
 
     resp = client.responses.create(
         model="gpt-4o-mini",
@@ -104,9 +106,11 @@ def main():
     # CLI:
     # python script.py [min_copyright_year]
     min_year = None
+    extra_prompt_information = ""
     if len(sys.argv) >= 2:
         try:
             min_year = int(sys.argv[1])
+            extra_prompt_information = sys.argv[2]
         except ValueError:
             print("Usage: python script.py [min_copyright_year]")
             print("  min_copyright_year must be an integer, e.g. 2020")
@@ -136,7 +140,7 @@ def main():
                 continue
 
             try:
-                data = identify_card(front_local, min_copyright_year=min_year)
+                data = identify_card(front_local, min_copyright_year=min_year, extra_prompt_information=extra_prompt_information)
 
                 out = {
                     **rec,
