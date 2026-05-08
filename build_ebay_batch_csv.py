@@ -192,12 +192,9 @@ def compute_raw_price(best_ungraded_price: float) -> float:
     Base pricing rule (before cents formatting):
       - floor at 2.49
       - if < 5 => +1.50
-      - if >= 5 => *1.25
+      - if >= 5 => *1.1
     """
-    m = max(2.49, float(best_ungraded_price))
-    if m >= 5.0:
-        return round(m * 1.25, 2)
-    return round(m + 1.50, 2)
+    return round(float(best_ungraded_price)*1.1 + 0.74 + 0.30, 2)
 
 
 def pretty_cents_49_or_95(x: float) -> float:
@@ -212,7 +209,7 @@ def pretty_cents_49_or_95(x: float) -> float:
     return round(dollars + 0.95, 2)
 
 
-def build_title(best_name: str, best_set_slug: str, input_collector: str, condition="NM") -> str:
+def build_title(best_name: str, best_set_slug: str, input_collector: str, condition="NM or LP") -> str:
     parts = [best_name.strip(), input_collector, normalize_slug(best_set_slug).strip(), condition]
     final = " ".join([p for p in parts if p])
     if len(final) < 60:
@@ -222,7 +219,11 @@ def build_title(best_name: str, best_set_slug: str, input_collector: str, condit
 
 
 def build_description(best_name: str, best_set_slug: str, best_number: str) -> str:
-    return f"{best_name} from {best_set_slug}, card number {best_number} in NM condition."
+    return """Please see pictures for details on the card condition. The picture of the card is of the exact card you will receive. NM or LP means the card is at best near mint and at worst lightly played. If there is excessive whitening on the card please reach out as it may be misconditioned. 
+
+    Finally - please shop my store! Buy 2 Get 1 Free for low value cards and buy 3 or more cards for 20% off your order for all cards!
+
+    I try to be conservative in my grading following ebay's best practices. Please reach out to me for any questions or concerns before purchase."""
 
 
 def main():
@@ -239,7 +240,7 @@ def main():
     ap.add_argument("--category", default="183454")
     ap.add_argument("--store-category", default="0")
     ap.add_argument("--condition-id", default="4000")
-    ap.add_argument("--card-condition", default="Near mint or better - (ID: 400010)")
+    ap.add_argument("--card-condition", default="Lightly Played (Excellent) - (ID: 400015)")
     ap.add_argument("--location", default="rockville, md")
     ap.add_argument("--postal-code", default="20850")
     ap.add_argument("--dispatch-time", default="1")
@@ -255,6 +256,7 @@ def main():
 
     # CustomLabel fixed value per your request
     ap.add_argument("--customlabel", default="batch-auto")
+    ap.add_argument("--skip-if-no-best-fields", default=True)
 
     args = ap.parse_args()
 
@@ -306,10 +308,10 @@ def main():
         best_number = (r.get("best_number") or "").strip()
         best_set_slug = (r.get("best_set_slug") or "").strip()
         input_collector = (r.get("input_collector") or "").strip()
-
-        if not best_name or not best_number or not best_set_slug:
-            skipped.append(f"[idx0={idx0} -> listing_index={manifest_idx}] missing best fields")
-            continue
+        print(type(args.skip_if_no_best_fields))
+        #if not best_name or not best_number or not best_set_slug and args.skip_if_no_best_fields:
+        #   skipped.append(f"[idx0={idx0} -> listing_index={manifest_idx}] missing best fields")
+        #   continue
 
         ungraded = parse_float(r.get("best_ungraded_price"))
         if ungraded is None:
@@ -338,9 +340,13 @@ def main():
         picurl = f"{front_url} | {back_url}"
 
         row = {c: "" for c in COLUMNS}
+        if manifest_idx < 9:
+            formatted_manifest_idx = f"-0{manifest_idx}"
+        else:
+            formatted_manifest_idx = f"-{manifest_idx}"
         row.update({
             COLUMNS[0]: "Add",
-            "CustomLabel": args.customlabel,  # same for all rows
+            "CustomLabel": args.customlabel + formatted_manifest_idx, 
             "*Category": args.category,
             "StoreCategory": args.store_category,
             "*Title": title,
