@@ -51,6 +51,7 @@ def identify_card(
     image_path: str,
     min_copyright_year: int | None = None,
     max_copyright_year: int | None = None,
+    add_to_prompt: str = ""
 ):
     img_url = to_data_url(image_path)
 
@@ -87,6 +88,8 @@ def identify_card(
         "- If multiple years appear, use the © copyright year (not set release year).\n"
         f"{year_rule_text}"
         "Set confidence from 0 to 1 (lower if anything is uncertain).\n"
+        
+        f"{add_to_prompt}"
     )
 
     resp = client.responses.create(
@@ -118,8 +121,9 @@ if __name__ == "__main__":
     #
     # argv[1] -> image path
     # argv[2] -> min copyright year (optional)
+    # argv[3] -> extra prompt information
 
-    if len(sys.argv) < 2:
+    if len(sys.argv) < 3:
         print("Usage: python script.py <image_path> [min_copyright_year]")
         sys.exit(1)
 
