@@ -187,14 +187,142 @@ def parse_int(val: Any) -> Optional[int]:
         return None
 
 
-def compute_raw_price(best_ungraded_price: float) -> float:
+def condition_short_from_str(card_condition: Optional[str]) -> str:
+    """Return short code (NM/LP/MP/HP) derived from a full condition string or ID."""
+    if not card_condition:
+        return "MP"
+    s = str(card_condition)
+    su = s.strip().upper()
+    sl = s.lower()
+    if "400010" in s or "NEAR MINT" in su or "near mint" in sl or su == "NM":
+        return "NM"
+    if "400015" in s or "LIGHTLY" in su or "lightly" in sl or su == "LP":
+        return "LP"
+    if "400016" in s or "MODERATELY" in su or "moderate" in sl or su == "MP":
+        return "MP"
+    if "400017" in s or "HEAVILY" in su or "heavily" in sl or su == "HP":
+        return "HP"
+    return "MP"
+
+
+def title_label_for_short(code: str) -> str:
+    """Human-friendly label to append to titles for a short code."""
+    if not code:
+        return ""
+    c = code.strip().upper()
+    if c in ("NM", "LP"):
+        return "NM/LP"
+    if c == "MP":
+        return "MP"
+    if c == "HP":
+        return "HP"
+    return code
+
+
+def condition_multiplier_from_str(card_condition: Optional[str]) -> float:
+    """Return multiplier for pricing based on card condition string/ID/short-code.
+
+    Mapping per user preference:
+      - Near mint (400010) / NM => +5% premium
+      - Lightly played (400015) / LP => +5% premium
+      - Moderately played (400016) / MP => baseline (1.00)
+      - Heavily played (400017) / HP => -5% reduction
+    """
+    if not card_condition:
+        return 1.0
+    s = str(card_condition)
+    su = s.strip().upper()
+    sl = s.lower()
+    # short-code explicit checks
+    if su in ("NM", "LP"):
+        return 1.05
+    if su == "MP":
+        return 1.0
+    if su == "HP":
+        return 0.95
+    # id and keyword checks
+    if "400010" in s or "near mint" in sl:
+        return 1.05
+    if "400015" in s or "lightly" in sl:
+        return 1.05
+    if "400016" in s or "moderately" in sl:
+        return 1.0
+    if "400017" in s or "heavily" in sl:
+        return 0.95
+    # fallback
+    return 1.0
+
+
+def custom_label_from_images_dir(images_dir: Optional[str]) -> str:
+    """Derive a custom label from an images directory path.
+
+    Robust rules, working from the end of the path:
+      1. If the path contains a 'cards' segment, return the next segment: .../cards/AD/... -> 'AD'
+      2. If the last segment looks like a date (YYYYMMDD, YYYY-MM-DD, or YYYY_MM_DD), return the previous segment.
+      3. Otherwise return the last path segment.
+
+    Examples:
+      /foo/bar/cards/AD/20260320 -> 'AD'
+      /foo/.../AD/20260320 -> 'AD'
+      /foo/.../some_label -> 'some_label'
+    """
+    if not images_dir:
+        return ""
+    p = os.path.normpath(images_dir)
+    parts = [pp for pp in p.split(os.sep) if pp]
+    if not parts:
+        return ""
+    lower = [pp.lower() for pp in parts]
+
+    # 1) Look for explicit 'cards' marker anywhere in the path
+    if 'cards' in lower:
+        idx = lower.index('cards')
+        if idx + 1 < len(parts):
+            return parts[idx + 1]
+
+    # 2) If the last segment looks like a date, return previous segment
+    last = parts[-1]
+    if re.fullmatch(r"\d{6,8}", last):
+        if len(parts) >= 2:
+            return parts[-2]
+    if re.fullmatch(r"\d{4}[-_]\d{2}[-_]\d{2}", last):
+        if len(parts) >= 2:
+            return parts[-2]
+
+    # 3) Otherwise return the last segment
+    return last
+
+
+def build_description(best_name: str, best_set_slug: str, best_number: str, cond_short: str = "MP") -> str:
+    """Build a description that varies slightly based on condition short code."""
+    label = title_label_for_short(cond_short)
+    if label == "NM/LP":
+        first = "The card is in Near Mint / Lightly Played condition. Please see pictures for details on the card condition."
+    elif label == "MP":
+        first = "The card is in Moderately Played condition. Please see pictures for details on the card condition."
+    elif label == "HP":
+        first = "The card is Heavily Played and may show significant wear. Please see pictures for details on the card condition."
+    else:
+        first = "Please see pictures for details on the card condition."
+
+    rest = (
+        "\n\nThe picture of the card is of the exact card you will receive. "
+        "If there is excessive whitening on the card please reach out as it may be misconditioned.\n\n"
+        "Finally - please shop my store! Buy more than 1 card and receive 20% off the total order.\n\n"
+        "I try to be conservative in my grading following ebay's best practices. Please reach out to me for any questions or concerns before purchase."
+    )
+    return f"{first}\n\n{rest}"
+
+
+def compute_raw_price(best_ungraded_price: float, card_condition: Optional[str] = None) -> float:
     """
     Base pricing rule (before cents formatting):
-      - floor at 2.49
-      - if < 5 => +1.50
-      - if >= 5 => *1.1
+      - apply condition multiplier
+      - markup calculation preserved from prior behavior
     """
-    return round(float(best_ungraded_price)*1.1 + 0.74 + 0.30, 2)
+    multiplier = condition_multiplier_from_str(card_condition)
+    base_price = float(best_ungraded_price) * multiplier
+    return round(base_price * 1.1 + 0.74 + 0.30, 2)
 
 
 def pretty_cents_49_or_95(x: float) -> float:
@@ -218,14 +346,6 @@ def build_title(best_name: str, best_set_slug: str, input_collector: str, condit
         return final
 
 
-def build_description(best_name: str, best_set_slug: str, best_number: str) -> str:
-    return """Please see pictures for details on the card condition. The picture of the card is of the exact card you will receive. NM or LP means the card is at best near mint and at worst lightly played. If there is excessive whitening on the card please reach out as it may be misconditioned. 
-
-    Finally - please shop my store! Buy 2 Get 1 Free for low value cards and buy 3 or more cards for 20% off your order for all cards!
-
-    I try to be conservative in my grading following ebay's best practices. Please reach out to me for any questions or concerns before purchase."""
-
-
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--manifest", default=DEFAULT_MANIFEST)
@@ -241,6 +361,8 @@ def main():
     ap.add_argument("--store-category", default="0")
     ap.add_argument("--condition-id", default="4000")
     ap.add_argument("--card-condition", default="Lightly Played (Excellent) - (ID: 400015)")
+    ap.add_argument("--card-condition-short", default="")
+    ap.add_argument("--images-dir", default="")
     ap.add_argument("--location", default="rockville, md")
     ap.add_argument("--postal-code", default="20850")
     ap.add_argument("--dispatch-time", default="1")
@@ -259,6 +381,12 @@ def main():
     ap.add_argument("--skip-if-no-best-fields", default=True)
 
     args = ap.parse_args()
+
+    # If images_dir provided and customlabel is default, derive custom label from path
+    if getattr(args, 'images_dir', None):
+        derived = custom_label_from_images_dir(args.images_dir)
+        if derived and (not args.customlabel or args.customlabel == 'batch-auto'):
+            args.customlabel = derived
 
     manifest_rows = read_jsonl(args.manifest)
     ident_rows = read_jsonl(args.idents)
@@ -321,8 +449,11 @@ def main():
             skipped.append(f"[idx0={idx0}] ungraded {ungraded:.2f} >= {args.max_ungraded:.2f}")
             continue
 
-        raw_price = compute_raw_price(ungraded)
+        raw_price = compute_raw_price(ungraded, args.card_condition)
         final_price = pretty_cents_49_or_95(raw_price)
+        # Enforce minimum final price requested by user
+        if final_price < 2.15:
+            final_price = round(2.15, 2)
         if final_price >= args.max_final:
             skipped.append(f"[idx0={idx0}] final {final_price:.2f} >= {args.max_final:.2f}")
             continue
@@ -333,8 +464,12 @@ def main():
         if year_manufactured is None:
             year_manufactured = parse_int(ident_by_idx.get(manifest_idx, {}).get("copyright_year"))
 
-        title = build_title(best_name, best_set_slug, input_collector)
-        desc = build_description(best_name, best_set_slug, best_number)
+        # Determine condition short code for title label (prefer explicit short arg)
+        cond_short = (args.card_condition_short or "").strip().upper()
+        if not cond_short:
+            cond_short = condition_short_from_str(args.card_condition)
+        title = build_title(best_name, best_set_slug, input_collector, title_label_for_short(cond_short))
+        desc = build_description(best_name, best_set_slug, best_number, cond_short)
 
         # EXACT delimiter to match your successful file
         picurl = f"{front_url} | {back_url}"
