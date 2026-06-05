@@ -59,10 +59,7 @@ def fetch_candidates(con,
     placeholders = ",".join(["?"] * len(set_slugs))
     n = str(num_x)
     n3 = n.zfill(3)
-    print(n)
-    print(n3)
-    print(set_slugs)
-    
+
     cur = con.cursor()
     cur.execute(f"""
         SELECT card_name, card_number, card_url,
@@ -120,16 +117,20 @@ def rank_candidates(card_name, num_x, candidates, top_k=10):
 # Public API
 # -----------------------
 
-def lookup_best_match(db_path,
+def lookup_best_match(con_or_path,
                       card_name,
                       collector_number,
                       set_size,
                       copyright_year,
                       top_k=10):
-
+    """
+    con_or_path may be either an open sqlite3.Connection (preferred — reused
+    across many calls) or a db path string (opens a one-shot connection).
+    """
     num_x = extract_x(collector_number)
 
-    con = sqlite3.connect(db_path)
+    owns_con = isinstance(con_or_path, str)
+    con = sqlite3.connect(con_or_path) if owns_con else con_or_path
     try:
         set_slugs = get_candidate_set_slugs(
             con,
@@ -142,7 +143,8 @@ def lookup_best_match(db_path,
             num_x=num_x
         )
     finally:
-        con.close()
+        if owns_con:
+            con.close()
 
     if not candidates:
         return []

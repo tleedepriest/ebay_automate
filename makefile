@@ -24,8 +24,22 @@ OUT_CSV ?= tmp/Batch.csv
 CATEGORY ?= 183454
 STORE_CATEGORY ?= 0
 CONDITION_ID ?= 4000
-#CARD_CONDITION ?= Near mint or better - (ID: 400010)
-CARD_CONDITION ?= Lightly Played (Excellent) - (ID: 400015)
+# CARD_CONDITION can be set directly to override automatic mapping.
+# Short-code to full condition mapping. Set CARD_CONDITION_SHORT=NM|LP|MP|HP when invoking make to control titles.
+ifndef CARD_CONDITION
+CARD_CONDITION_SHORT ?= MP
+ifeq ($(CARD_CONDITION_SHORT),NM)
+CARD_CONDITION := Near mint or better - (ID: 400010)
+else ifeq ($(CARD_CONDITION_SHORT),LP)
+CARD_CONDITION := Lightly Played (Excellent) - (ID: 400015)
+else ifeq ($(CARD_CONDITION_SHORT),MP)
+CARD_CONDITION := Moderately played (Very good) - (ID: 400016)
+else ifeq ($(CARD_CONDITION_SHORT),HP)
+CARD_CONDITION := Heavily played (Poor) - (ID: 400017)
+else
+CARD_CONDITION := Lightly Played (Excellent) - (ID: 400015)
+endif
+endif
 
 LOCATION ?= rockville, md
 POSTAL_CODE ?= 20850
@@ -38,7 +52,18 @@ PAYMENT_PROFILE ?= buy_it_now
 BEST_OFFER_ENABLED ?= 0
 CUSTOM_LABEL ?= batch-auto
 
-.PHONY: upload identify lookup build all clean
+# ---------- publish ----------
+# Copy the finished Batch.csv into the shared outputs folder, named
+# <BATCH_NAME>-<DATE>.csv. Both are derived from IMAGES_DIR by default:
+#   IMAGES_DIR = .../cards/BP/20260605  ->  BATCH_NAME=BP  DATE=20260605
+# Override BATCH_NAME=, DATE=, or OUTPUT_DIR= on the command line if needed.
+OUTPUT_DIR ?= /media/sf_VM_shared/ebay_automate_outputs
+IMAGES_DIR_CLEAN := $(patsubst %/,%,$(IMAGES_DIR))
+DATE ?= $(notdir $(IMAGES_DIR_CLEAN))
+BATCH_NAME ?= $(notdir $(patsubst %/,%,$(dir $(IMAGES_DIR_CLEAN))))
+PUBLISH_CSV ?= $(OUTPUT_DIR)/$(BATCH_NAME)-$(DATE).csv
+
+.PHONY: upload identify lookup build publish all clean
 
 upload:
 	@if [ -z "$(IMAGES_DIR)" ]; then \
@@ -73,10 +98,12 @@ build:
 		--idents "$(OUT_IDENTS)" \
 		--match-review "$(OUT_REVIEW)" \
 		--out "$(OUT_CSV)" \
+		--manifest "$(OUT_MANIFEST)" \
 		--category "$(CATEGORY)" \
 		--store-category "$(STORE_CATEGORY)" \
 		--condition-id "$(CONDITION_ID)" \
 		--card-condition "$(CARD_CONDITION)" \
+		--images-dir "$(IMAGES_DIR)" \
 		--location "$(LOCATION)" \
 		--postal-code "$(POSTAL_CODE)" \
 		--dispatch-time "$(DISPATCH_TIME)" \
@@ -86,7 +113,21 @@ build:
 		--best-offer-enabled "$(BEST_OFFER_ENABLED)" \
 		--customlabel "$(CUSTOM_LABEL)"
 
-all: upload identify lookup build
+publish:
+	@if [ ! -f "$(OUT_CSV)" ]; then \
+	  echo "ERROR: missing $(OUT_CSV). Run build first."; \
+	  exit 1; \
+	fi
+	@if [ -z "$(BATCH_NAME)" ] || [ -z "$(DATE)" ]; then \
+	  echo "ERROR: could not derive BATCH_NAME/DATE from IMAGES_DIR='$(IMAGES_DIR)'."; \
+	  echo "       Pass BATCH_NAME= and DATE= explicitly, e.g. make publish BATCH_NAME=BP DATE=20260605"; \
+	  exit 1; \
+	fi
+	mkdir -p "$(OUTPUT_DIR)"
+	cp "$(OUT_CSV)" "$(PUBLISH_CSV)"
+	@echo "Published -> $(PUBLISH_CSV)"
+
+all: upload identify lookup build publish
 
 clean:
 	rm -f tmp/upload_manifest.jsonl

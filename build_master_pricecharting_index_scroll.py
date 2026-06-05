@@ -1,5 +1,6 @@
 import csv
 import os
+import sys
 import time
 import sqlite3
 from bs4 import BeautifulSoup
@@ -255,6 +256,36 @@ def build_db_from_sets_csv(
     finally:
         con.close()
 
+def build_db_from_link(
+    set_link: str = "https://www.pricecharting.com/console/pokemon-paldean-fates",
+    db_path: str = "pricecharting.db",
+    chromedriver_path: str = "/home/leeone/bin/chromedriver",
+    headless: bool = True,
+    chrome_binary: str | None = None,
+    limit_sets: int | None = None,
+):
+    con = init_db(db_path)
+    driver = make_chrome_driver(chromedriver_path, headless=headless, chrome_binary=chrome_binary)
+    set_url = set_link
+    set_name = set_link.split("/")[-1].replace("pokemon-", "").split("-")
+    set_name = " ".join([name.upper() for name in set_name])
+    print(f" {set_name} | {set_url}")
+
+    try:
+        html = scrape_set_with_retry(
+                set_url=set_url,
+                chromedriver_path=chromedriver_path,
+                headless=headless,
+                chrome_binary=chrome_binary,
+                max_attempts=3
+                )
+        cards = parse_cards_from_html(set_url, html)
+        upsert_cards(con, cards)
+        print(f"  +{len(cards)} cards")
+    except Exception as e:
+        print(f"  ERROR: {e}")
+
+    con.close()
 
 if __name__ == "__main__":
     # EDIT THESE PATHS:
@@ -263,8 +294,13 @@ if __name__ == "__main__":
     # If you’re using system Chrome at /opt/google/chrome/chrome, you can leave this as None.
     # If using a chrome-for-testing zip, point to its "chrome" binary.
     CHROME_BINARY = None  # e.g. "/home/leeone/chrome145/chrome-linux64/chrome"
+    if sys.argv[1]:
+        build_db_from_link(set_link=sys.argv[1],
+                           chromedriver_path=CHROMEDRIVER_PATH,
+                           chrome_binary=CHROME_BINARY)
 
-    build_db_from_sets_csv(
+    else:
+        build_db_from_sets_csv(
         sets_csv="pricecharting_sets.csv",
         db_path="pricecharting.db",
         chromedriver_path=CHROMEDRIVER_PATH,

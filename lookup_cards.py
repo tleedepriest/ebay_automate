@@ -14,6 +14,7 @@
 import os
 import json
 import csv
+import sqlite3
 from typing import Any, Dict, Optional
 
 from lookup_pc_fuzzy import lookup_best_match
@@ -66,6 +67,14 @@ def run(
 
     review_rows = []
 
+    # Single connection reused across all cards. Ensure the set_meta filter index
+    # exists so candidate-set lookups use an index instead of a full table scan.
+    con = sqlite3.connect(DB_PATH)
+    con.execute(
+        "CREATE INDEX IF NOT EXISTS idx_set_meta_filter "
+        "ON set_meta(language, base_total, released_year)"
+    )
+
     with open(IN_JSONL, "r", encoding="utf-8") as fin, open(OUT_JSONL, "w", encoding="utf-8") as fout:
         for idx, line in enumerate(fin):
             if idx < start_at:
@@ -85,7 +94,7 @@ def run(
             oai_conf = to_float(rec.get("confidence"))
 
             matches = lookup_best_match(
-                DB_PATH,
+                con,
                 card_name=name,
                 collector_number=collector_number,
                 set_size=set_size,
@@ -149,6 +158,8 @@ def run(
                 )
             else:
                 print(f"[{idx}] MISS {img}: {name} {collector_number}  **REVIEW**")
+
+    con.close()
 
     # Write review CSV
     if review_rows:

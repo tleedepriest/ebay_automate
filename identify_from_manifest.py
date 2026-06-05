@@ -1,27 +1,52 @@
 import os
 import sys
+import io
 import base64
 import json
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from openai import OpenAI
+from PIL import Image
 
 client = OpenAI()
 
 IN_MANIFEST = "tmp/upload_manifest.jsonl"
 TMP_OUT = "tmp/card_identifications.jsonl"
 
+# Identify calls are independent network round-trips, so we fan them out across a
+# thread pool. The OpenAI client is thread-safe; tune workers down if you hit rate
+# limits. Output is still written in manifest order (downstream stages join by line
+# position), so concurrency does not change the result file.
+MAX_WORKERS = int(os.environ.get("IDENTIFY_WORKERS", "16"))
+
+# Scanner PNGs are ~1.7 MB. Downscaling to a long edge of MAX_EDGE px and re-encoding
+# as JPEG cuts the payload ~12x and roughly halves per-call latency (fewer vision
+# tiles / image tokens) with no observed loss in card-text extraction. Set
+# IDENTIFY_MAX_EDGE=0 to disable downscaling and send the original bytes.
+MAX_EDGE = int(os.environ.get("IDENTIFY_MAX_EDGE", "768"))
+JPEG_QUALITY = int(os.environ.get("IDENTIFY_JPEG_QUALITY", "85"))
+
 def to_data_url(path: str) -> str:
-    with open(path, "rb") as f:
-        b64 = base64.b64encode(f.read()).decode("utf-8")
+    # Fast path: downscaling disabled -> send original bytes untouched.
+    if MAX_EDGE <= 0:
+        with open(path, "rb") as f:
+            b64 = base64.b64encode(f.read()).decode("utf-8")
+        ext = os.path.splitext(path)[1].lower()
+        if ext in [".jpg", ".jpeg"]:
+            mime = "image/jpeg"
+        elif ext == ".webp":
+            mime = "image/webp"
+        else:
+            mime = "image/png"
+        return f"data:{mime};base64,{b64}"
 
-    ext = os.path.splitext(path)[1].lower()
-    if ext in [".jpg", ".jpeg"]:
-        mime = "image/jpeg"
-    elif ext == ".webp":
-        mime = "image/webp"
-    else:
-        mime = "image/png"
-
-    return f"data:{mime};base64,{b64}"
+    # Downscale to MAX_EDGE on the long side and re-encode as JPEG.
+    with Image.open(path) as im:
+        im = im.convert("RGB")
+        im.thumbnail((MAX_EDGE, MAX_EDGE))  # preserves aspect ratio, no upscaling
+        buf = io.BytesIO()
+        im.save(buf, "JPEG", quality=JPEG_QUALITY)
+    b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
+    return f"data:image/jpeg;base64,{b64}"
 
 # Updated schema:
 # - copyright_year can be null (instead of forcing wrong integer guesses)
@@ -119,49 +144,49 @@ def main():
     print(f"Reading manifest: {IN_MANIFEST}")
     print(f"Writing output:   {TMP_OUT}")
     print(f"Min year filter:  {min_year if min_year is not None else '(none)'}")
+    print(f"Workers:          {MAX_WORKERS}")
 
-    with open(IN_MANIFEST, "r", encoding="utf-8") as fin, \
-         open(TMP_OUT, "w", encoding="utf-8") as fout:
+    # Read the whole manifest first so we can keep the output in manifest order
+    # while processing identifications concurrently.
+    with open(IN_MANIFEST, "r", encoding="utf-8") as fin:
+        records = [json.loads(l) for l in fin if l.strip()]
 
-        for line in fin:
-            line = line.strip()
-            if not line:
-                continue
+    def process(rec):
+        """Run a single identification. Returns the JSONL-ready dict; never raises."""
+        idx = rec.get("listing_index")
+        front_local = rec.get("front_local")
 
-            rec = json.loads(line)
+        if not front_local or not os.path.exists(front_local):
+            print(f"[{idx}] FAIL missing front image:", front_local)
+            return {**rec, "error": f"front_local missing or not found: {front_local}"}
 
-            idx = rec.get("listing_index")
-            front_local = rec.get("front_local")
+        try:
+            data = identify_card(
+                front_local,
+                min_copyright_year=min_year,
+                extra_prompt_information=extra_prompt_information,
+            )
+            cy = data.get("copyright_year")
+            yr_ok = data.get("year_in_range")
+            print(
+                f"[{idx}] OK {data['card_name']} | ©{cy} | year_ok={yr_ok} | "
+                f"set_size={data['set_size']} | #{data['collector_number']} | conf={data['confidence']}"
+            )
+            return {**rec, **data, "image": front_local, "min_copyright_year": min_year}
+        except Exception as e:
+            print(f"[{idx}] FAIL {front_local} -> {e}")
+            return {**rec, "error": str(e), "image": front_local, "min_copyright_year": min_year}
 
-            if not front_local or not os.path.exists(front_local):
-                out = {**rec, "error": f"front_local missing or not found: {front_local}"}
-                fout.write(json.dumps(out) + "\n")
-                print(f"[{idx}] FAIL missing front image:", front_local)
-                continue
+    # Fan out across the pool; collect results by position to preserve manifest order.
+    results = [None] * len(records)
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as ex:
+        futs = {ex.submit(process, rec): i for i, rec in enumerate(records)}
+        for fut in as_completed(futs):
+            results[futs[fut]] = fut.result()
 
-            try:
-                data = identify_card(front_local, min_copyright_year=min_year, extra_prompt_information=extra_prompt_information)
-
-                out = {
-                    **rec,
-                    **data,
-                    "image": front_local,
-                    "min_copyright_year": min_year,  # record what rule was used
-                }
-
-                fout.write(json.dumps(out) + "\n")
-
-                cy = data.get("copyright_year")
-                yr_ok = data.get("year_in_range")
-                print(
-                    f"[{idx}] OK {data['card_name']} | ©{cy} | year_ok={yr_ok} | "
-                    f"set_size={data['set_size']} | #{data['collector_number']} | conf={data['confidence']}"
-                )
-
-            except Exception as e:
-                out = {**rec, "error": str(e), "image": front_local, "min_copyright_year": min_year}
-                fout.write(json.dumps(out) + "\n")
-                print(f"[{idx}] FAIL {front_local} -> {e}")
+    with open(TMP_OUT, "w", encoding="utf-8") as fout:
+        for out in results:
+            fout.write(json.dumps(out) + "\n")
 
     print("Wrote:", TMP_OUT)
 

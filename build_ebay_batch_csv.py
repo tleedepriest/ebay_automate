@@ -211,7 +211,7 @@ def title_label_for_short(code: str) -> str:
         return ""
     c = code.strip().upper()
     if c in ("NM", "LP"):
-        return "NM/LP"
+        return "NM or LP"
     if c == "MP":
         return "MP"
     if c == "HP":
