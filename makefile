@@ -13,6 +13,13 @@ OUT_IDENTS ?= tmp/card_identifications.jsonl
 MIN_YEAR ?=
 EXTRA_PROMPT_INFORMATION ?=
 
+# ---------- refresh prices ----------
+# Scrape PriceCharting to refresh prices for the sets in this batch before
+# matching, so listings use current prices instead of stale ones. On by default
+# in `make all`; disable for a faster run (stale prices) with REFRESH_PRICES=0.
+REFRESH_PRICES ?= 1
+CHROMEDRIVER ?= chromedriver-linux64/chromedriver
+
 # ---------- lookup ----------
 IN_IDENTS ?= tmp/card_identifications.jsonl
 OUT_MATCHES ?= tmp/card_matches.jsonl
@@ -63,7 +70,7 @@ DATE ?= $(notdir $(IMAGES_DIR_CLEAN))
 BATCH_NAME ?= $(notdir $(patsubst %/,%,$(dir $(IMAGES_DIR_CLEAN))))
 PUBLISH_CSV ?= $(OUTPUT_DIR)/$(BATCH_NAME)-$(DATE).csv
 
-.PHONY: upload identify lookup build publish all clean
+.PHONY: upload identify refresh lookup build publish all clean
 
 upload:
 	@if [ -z "$(IMAGES_DIR)" ]; then \
@@ -80,6 +87,17 @@ identify:
 	$(PY) identify_from_manifest.py \
 		$(if $(MIN_YEAR), $(MIN_YEAR)) \
 		$(if $(EXTRA_PROMPT_INFORMATION), "$(EXTRA_PROMPT_INFORMATION)")
+
+refresh:
+	@if [ "$(REFRESH_PRICES)" != "1" ]; then \
+	  echo "Skipping price refresh (set REFRESH_PRICES=1 to enable)."; \
+	else \
+	  if [ ! -f "$(OUT_IDENTS)" ]; then \
+	    echo "ERROR: missing $(OUT_IDENTS). Run identify first."; \
+	    exit 1; \
+	  fi; \
+	  $(PY) refresh_set_prices.py --idents "$(OUT_IDENTS)" --chromedriver "$(CHROMEDRIVER)"; \
+	fi
 
 lookup:
 	@if [ ! -f "$(OUT_IDENTS)" ]; then \
@@ -127,7 +145,7 @@ publish:
 	cp "$(OUT_CSV)" "$(PUBLISH_CSV)"
 	@echo "Published -> $(PUBLISH_CSV)"
 
-all: upload identify lookup build publish
+all: upload identify refresh lookup build publish
 
 clean:
 	rm -f tmp/upload_manifest.jsonl

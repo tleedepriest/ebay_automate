@@ -129,7 +129,6 @@ def scrape_set_with_retry(
             driver.set_page_load_timeout(120)
             driver.set_script_timeout(120)
             html = fetch_full_set_html_by_scrolling(driver, set_url, max_scrolls=20, settle_rounds=1)
-            print(html)
             return html
         except Exception as e:
             last_err = e

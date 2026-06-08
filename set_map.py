@@ -61,7 +61,11 @@ SET_MAP = {
     "pokemon-hidden-fates": "Hidden Fates Set",
     "pokemon-hidden-legends":"EX Hidden Legends Set",
     "pokemon-holon-phantoms": "EX Holon Phantoms Set",
-    "pokemon-journey-together": "Journey Together Set",
+    # Intentionally NOT mapped: Pokellector lists Journey Together base_total=180
+    # (counts secret rares), but cards print /159. Mapping it lets backfill_set_meta
+    # overwrite the corrected base_total (159, set via update_journey_together.py)
+    # back to 180, which breaks matching for /159 cards. Leave unmapped.
+    # "pokemon-journey-together": "Journey Together Set",
     "pokemon-jungle": "Jungle Set",
     "pokemon-legendary-collection": "Legendary Collection Set",
     "pokemon-legendary-treasures": "Legendary Treasures Set",

@@ -102,14 +102,41 @@ def run(
                 top_k=top_k,
             )
 
+            # The year filter (released_year in {year, year-1}) hard-excludes the
+            # correct set when the © year is misread (common on modern cards, e.g. a
+            # 2025 card read as 2015). If a year-filtered lookup finds nothing, retry
+            # ignoring the year so a misread doesn't drop an otherwise-clear match.
+            year_was_ignored = False
+            if not matches and year is not None:
+                matches = lookup_best_match(
+                    con,
+                    card_name=name,
+                    collector_number=collector_number,
+                    set_size=set_size,
+                    copyright_year=None,
+                    top_k=top_k,
+                )
+                year_was_ignored = bool(matches)
+
             best = matches[0] if matches else None
+
+            # When the year is missing OR we had to ignore it, we lose the year as a
+            # disambiguator. That only causes a problem when the top score is tied
+            # across MORE THAN ONE set (e.g. a card reprinted across eras); a single
+            # clear set is safe to list. With a reliable year we trust the match.
+            year_unreliable = (year is None) or year_was_ignored
+            ambiguous_without_year = False
+            if year_unreliable and best is not None:
+                top_score = best.get("score", 0)
+                top_sets = {m.get("set_slug") for m in matches if m.get("score", 0) == top_score}
+                ambiguous_without_year = len(top_sets) > 1
 
             # Review logic: deterministic pipeline should prefer "no match" over wrong match
             needs_review = (
                 best is None
                 or best.get("score", 0) < min_name_score
                 or set_size is None
-                or year is None
+                or ambiguous_without_year
                 or not collector_number
                 or not name
             )
