@@ -368,6 +368,12 @@ def main():
     ap.add_argument("--dispatch-time", default="1")
 
     ap.add_argument("--shipping-profile", default="free_shipping_under_20")
+    # eBay Standard Envelope (cheap, untracked) is only allowed for cards with a sale
+    # price under $20; at/above the threshold we must use a tracked profile. When a
+    # high-value profile is set, over-threshold cards are LISTED with it instead of
+    # being skipped. If it's empty, the old behavior holds (skip over-threshold cards).
+    ap.add_argument("--shipping-profile-high", default="")
+    ap.add_argument("--shipping-threshold", type=float, default=20.0)
     ap.add_argument("--return-profile", default="30_day_returns")
     ap.add_argument("--payment-profile", default="buy_it_now")
 
@@ -445,18 +451,25 @@ def main():
         if ungraded is None:
             skipped.append(f"[idx0={idx0}] missing/invalid best_ungraded_price")
             continue
-        if ungraded >= args.max_ungraded:
-            skipped.append(f"[idx0={idx0}] ungraded {ungraded:.2f} >= {args.max_ungraded:.2f}")
-            continue
 
         raw_price = compute_raw_price(ungraded, args.card_condition)
         final_price = pretty_cents_49_or_95(raw_price)
         # Enforce minimum final price requested by user
         if final_price < 2.15:
             final_price = round(2.15, 2)
-        if final_price >= args.max_final:
-            skipped.append(f"[idx0={idx0}] final {final_price:.2f} >= {args.max_final:.2f}")
-            continue
+
+        # Pick the shipping profile by listing price. Under the threshold uses the
+        # cheap (Standard Envelope) profile; at/above it needs a tracked profile.
+        high_profile = (args.shipping_profile_high or "").strip()
+        if final_price >= args.shipping_threshold:
+            if high_profile:
+                shipping_profile = high_profile
+            else:
+                # No tracked profile configured -> preserve old behavior: skip it.
+                skipped.append(f"[idx0={idx0}] final {final_price:.2f} >= {args.shipping_threshold:.2f}, no tracked profile")
+                continue
+        else:
+            shipping_profile = args.shipping_profile
 
         # Fallback fields from ident file (also 1-based listing_index)
         language = (ident_by_idx.get(manifest_idx, {}).get("language") or "").strip()
@@ -505,7 +518,7 @@ def main():
             "*Location": args.location,
             "PostalCode": args.postal_code,
             "*DispatchTimeMax": args.dispatch_time,
-            "ShippingProfileName": args.shipping_profile,
+            "ShippingProfileName": shipping_profile,
             "ReturnProfileName": args.return_profile,
             "PaymentProfileName": args.payment_profile,
             "BestOfferEnabled": args.best_offer_enabled,

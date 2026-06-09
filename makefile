@@ -53,6 +53,10 @@ POSTAL_CODE ?= 20850
 DISPATCH_TIME ?= 1
 
 SHIPPING_PROFILE ?= free_shipping_under_20
+# Cards listed at/above SHIPPING_THRESHOLD use the tracked profile (eBay Standard
+# Envelope is only valid under $20). Such cards are listed, not skipped.
+SHIPPING_PROFILE_HIGH ?= tracking-over-20
+SHIPPING_THRESHOLD ?= 20
 RETURN_PROFILE ?= 30_day_returns
 PAYMENT_PROFILE ?= buy_it_now
 
@@ -126,6 +130,8 @@ build:
 		--postal-code "$(POSTAL_CODE)" \
 		--dispatch-time "$(DISPATCH_TIME)" \
 		--shipping-profile "$(SHIPPING_PROFILE)" \
+		--shipping-profile-high "$(SHIPPING_PROFILE_HIGH)" \
+		--shipping-threshold "$(SHIPPING_THRESHOLD)" \
 		--return-profile "$(RETURN_PROFILE)" \
 		--payment-profile "$(PAYMENT_PROFILE)" \
 		--best-offer-enabled "$(BEST_OFFER_ENABLED)" \
